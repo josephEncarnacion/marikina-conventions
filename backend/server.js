@@ -1,13 +1,23 @@
+// file: server.js
 require("dotenv").config();
 const express = require("express");
 const sql = require("mssql");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-
+const session = require("express-session");
 const app = express();
+
 app.use(express.json());
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
+
+app.use(
+  session({
+    secret: "your-session-secret",
+    resave: false,
+    saveUninitialized: true,
+    cookie: { maxAge: 60 * 60 * 1000 }, // 1 hour
+  })
+);
 
 // Database config
 const dbConfig = {
@@ -21,8 +31,8 @@ const dbConfig = {
   authentication: {
     type: "default",
   },
-  user: "sa", // Your SQL Server Authentication username
-  password: "123", // Your SA password
+  user: "sa",
+  password: "123",
 };
 
 async function connectDB() {
@@ -35,10 +45,10 @@ async function connectDB() {
 }
 
 connectDB();
-// Register User with Role
+
 app.post("/register", async (req, res) => {
   const { username, password } = req.body;
-  const role = "user"; // Default role set to 'user'
+  const role = "user";
   const hashedPassword = await bcrypt.hash(password, 10);
 
   try {
@@ -50,30 +60,21 @@ app.post("/register", async (req, res) => {
   }
 });
 
-// Login User with Role
 app.post("/login", async (req, res) => {
   const { username, password } = req.body;
 
   try {
     await sql.connect(dbConfig);
-    const result =
-      await sql.query`SELECT * FROM Users WHERE username = ${username}`;
+    const result = await sql.query`SELECT * FROM Users WHERE username = ${username}`;
     const user = result.recordset[0];
 
     if (user && (await bcrypt.compare(password, user.password))) {
-      // Include user ID in the JWT payload
-      const token = jwt.sign(
-        { username, role: user.role, userId: user.id },
-        "secret_key",
-        { expiresIn: "1h" }
-      );
-
-      // Return user ID along with token and role
-      res.json({
-        token,
+      req.session.user = {
+        id: user.id,
+        username: user.username,
         role: user.role,
-        userId: user.id,
-      });
+      };
+      res.json({ message: "Login successful", user: req.session.user });
     } else {
       res.status(401).json({ error: "Invalid credentials" });
     }
@@ -82,6 +83,25 @@ app.post("/login", async (req, res) => {
     res.status(500).json({ error: "Login failed!" });
   }
 });
+
+app.get("/logout", (req, res) => {
+  req.session.destroy((err) => {
+    if (err) return res.status(500).json({ error: "Logout failed!" });
+    res.clearCookie("connect.sid");
+    res.json({ message: "Logged out successfully" });
+  });
+});
+
+
+// server.js
+app.get("/session", (req, res) => {
+  if (req.session.user) {
+    res.json({ user: req.session.user });
+  } else {
+    res.status(401).json({ error: "No session found" });
+  }
+});
+
 
 app.post("/admin/add-room", async (req, res) => {
   const { roomType, price, features, guests, amenities } = req.body;
